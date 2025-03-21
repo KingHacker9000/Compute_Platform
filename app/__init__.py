@@ -56,11 +56,27 @@ def detect_framework(job_path):
 def get_base_image(framework):
     """Get the appropriate Docker base image for the framework."""
     images = {
-        'pytorch': 'pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime',
-        'tensorflow': 'tensorflow/tensorflow:2.14.0-gpu',
-        'python': 'python:3.10-slim'
+        'pytorch': 'rocm/pytorch:latest',  # ROCm-enabled PyTorch
+        'tensorflow': 'rocm/tensorflow:latest',  # ROCm-enabled TensorFlow
+        'python': 'python:3.10-slim'  # Keep default Python image for non-ML workloads
     }
     return images.get(framework, 'python:3.10-slim')
+
+def is_wsl():
+    """Check if running under Windows Subsystem for Linux."""
+    try:
+        with open('/proc/version', 'r') as f:
+            return 'microsoft' in f.read().lower()
+    except:
+        return False
+
+def has_rocm():
+    """Check if ROCm is available on the system."""
+    try:
+        subprocess.run(['rocminfo'], capture_output=True, check=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
 
 def create_app():
     app = Flask(__name__)
@@ -288,9 +304,28 @@ def run_docker_container(app, job_id, workspace_dir):
     container_port = app.jobs_metadata[job_id].get('container_port', 8000)
     
     # Build Docker command
-    cmd = ['docker', 'run', '--name', container_name, '--gpus', 'all',
-           '-v', f'{docker_workspace_dir}:/app',
-           '-w', '/app']
+    cmd = ['docker', 'run', '--name', container_name]
+    
+    # Add GPU support based on environment
+    is_rocm_available = is_wsl() and has_rocm()
+    if is_rocm_available and framework in ['pytorch', 'tensorflow']:
+        # Add ROCm device access
+        cmd.extend([
+            '--device=/dev/kfd',
+            '--device=/dev/dri',
+            '--group-add', 'video'
+        ])
+        app.jobs_metadata[job_id]['logs'].append("ROCm GPU support enabled")
+    else:
+        # Remove --gpus flag if no GPU support is available
+        if not is_rocm_available and framework in ['pytorch', 'tensorflow']:
+            app.jobs_metadata[job_id]['logs'].append("Warning: No GPU support detected")
+    
+    # Add volume mount and working directory
+    cmd.extend([
+        '-v', f'{docker_workspace_dir}:/app',
+        '-w', '/app'
+    ])
     
     # Add port mapping for web apps
     if is_web:
@@ -313,15 +348,16 @@ def run_docker_container(app, job_id, workspace_dir):
             return False, f"Could not find available port after {max_port_attempts} attempts. Last error: {last_error}"
         
         app.jobs_metadata[job_id]['host_port'] = host_port
-        # Always use port mapping for web apps, regardless of OS
         cmd.extend(['-p', f'{host_port}:{container_port}'])
         # Add environment variables for the web app
-        cmd.extend(['-e', f'PORT={container_port}',
-                   '-e', f'FLASK_RUN_PORT={container_port}',
-                   '-e', f'FLASK_RUN_HOST=0.0.0.0',
-                   '-e', 'HOST=0.0.0.0'])  # Ensure app binds to all interfaces
+        cmd.extend([
+            '-e', f'PORT={container_port}',
+            '-e', f'FLASK_RUN_PORT={container_port}',
+            '-e', 'FLASK_RUN_HOST=0.0.0.0',
+            '-e', 'HOST=0.0.0.0'  # Ensure app binds to all interfaces
+        ])
     
-    # Add base image and command
+    # Add base image
     cmd.append(base_image)
     
     # Check for run.sh or main.py using original path

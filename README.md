@@ -1,8 +1,6 @@
-# GenAIGenesis AI Hackathon Platform
+# AI Computer Platform
 
-![GenAIGenesis Logo](app/static/genaigenesis-logo.png)
-
-A powerful web-based platform built for Canada's Largest AI Hackathon: GenAIGenesis. This platform enables participants to submit GitHub repositories, run AI models inside Docker containers with AMD GPU support, and view real-time logs. It also supports hosting live web demos from Flask, Django, or Gunicorn apps at clean URLs.
+A powerful web-based platform for running AI workloads. This platform enables users to submit GitHub repositories, run AI models inside Docker containers with AMD GPU support, and view real-time logs. It also supports hosting live web demos from Flask, Django, or Gunicorn apps at clean URLs.
 
 ## ✨ Features
 
@@ -30,8 +28,8 @@ A powerful web-based platform built for Canada's Largest AI Hackathon: GenAIGene
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/your-org/genaigenesis-platform.git
-cd genaigenesis-platform
+git clone https://github.com/your-org/ai-compute-platform.git
+cd ai-compute-platform
 ```
 
 2. Create and activate a virtual environment:
@@ -122,7 +120,7 @@ gpu: true          # Requires GPU access
 - Dynamic GPU resource allocation
 
 ### Container Management
-- Parallel job execution
+- Parallel job execution (default: 3 concurrent jobs)
 - Automatic cleanup after completion
 - Resource limits and timeouts
 
@@ -161,4 +159,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📞 Support
 
-For support, please open an issue on the GitHub repository or contact the GenAIGenesis team. 
+For support, please open an issue on the GitHub repository. 

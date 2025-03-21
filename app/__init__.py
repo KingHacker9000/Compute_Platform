@@ -7,15 +7,16 @@ import threading
 import time
 import subprocess
 import shutil
-import tempfile
-import zipfile
-import uuid
 import traceback
+import socket
+from concurrent.futures import ThreadPoolExecutor
 
 # Configuration
 JOB_EXPIRATION_MINUTES = 120  # Time after which jobs are deleted
+MAX_CONCURRENT_JOBS = 3  # Maximum number of jobs that can run simultaneously
 
 db = SQLAlchemy()
+job_semaphore = threading.Semaphore(MAX_CONCURRENT_JOBS)
 
 def check_docker_running():
     """Check if Docker daemon is running."""
@@ -170,43 +171,88 @@ def cleanup_old_jobs(app):
             print("Stack trace:", traceback.format_exc())
             time.sleep(60)  # Wait a minute before retrying on error
 
-def background_worker(app):
-    """Background thread to process jobs."""
-    while True:
+def process_job(app, job_id):
+    """Process a single job with resource management."""
+    with job_semaphore:
         try:
-            if app.job_queue:
-                job_id = app.job_queue.pop(0)
-                job = app.jobs_metadata.get(job_id)
-                
-                if job:
-                    print(f"Processing job {job_id}")
-                    job['status'] = 'Running'
-                    job['start_time'] = datetime.now().timestamp()
-                    
-                    # Get workspace directory
-                    workspace_dir = os.path.join('workspace', job_id)
-                    
-                    # Run the job in Docker
-                    success, message = run_docker_container(app, job_id, workspace_dir)
-                    
-                    # Update job status
-                    job['status'] = 'Completed' if success else 'Failed'
-                    job['end_time'] = datetime.now().timestamp()
-                    job['logs'].append(f"Job {'completed' if success else 'failed'}: {message}")
-                    
-                    print(f"Job {job_id} {'completed' if success else 'failed'}")
+            job = app.jobs_metadata.get(job_id)
+            if not job:
+                return
             
-            time.sleep(1)  # Check queue every second
+            print(f"Processing job {job_id}")
+            job['status'] = 'Running'
+            job['start_time'] = datetime.now().timestamp()
+            
+            # Get workspace directory
+            workspace_dir = os.path.join('workspace', job_id)
+            
+            # Run the job in Docker
+            success, message = run_docker_container(app, job_id, workspace_dir)
+            
+            # Update job status
+            job['status'] = 'Completed' if success else 'Failed'
+            job['end_time'] = datetime.now().timestamp()
+            job['logs'].append(f"Job {'completed' if success else 'failed'}: {message}")
+            
+            print(f"Job {job_id} {'completed' if success else 'failed'}")
             
         except Exception as e:
-            print(f"Error in background worker: {str(e)}")
-            time.sleep(5)  # Wait 5 seconds before retrying on error
+            print(f"Error processing job {job_id}: {str(e)}")
+            if job:
+                job['status'] = 'Failed'
+                job['end_time'] = datetime.now().timestamp()
+                job['logs'].append(f"Job failed with error: {str(e)}")
+
+def background_worker(app):
+    """Background thread to manage job queue and parallel execution."""
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS) as executor:
+        while True:
+            try:
+                # Process all queued jobs that can be started
+                while app.job_queue and job_semaphore._value > 0:
+                    job_id = app.job_queue.pop(0)
+                    # Submit the job to the thread pool
+                    executor.submit(process_job, app, job_id)
+                
+                time.sleep(1)  # Check queue every second
+                
+            except Exception as e:
+                print(f"Error in background worker: {str(e)}")
+                time.sleep(5)  # Wait 5 seconds before retrying on error
+
+def find_available_port(start_port=9000):
+    """Find an available port starting from start_port."""
+    max_attempts = 100  # Prevent infinite loop
+    current_port = start_port
+    
+    for _ in range(max_attempts):
+        try:
+            # Try to bind to the port
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('0.0.0.0', current_port))
+                return current_port
+        except OSError:
+            # Port is in use, try Docker port check as well
+            try:
+                # Check if port is used by Docker
+                result = subprocess.run(['docker', 'ps', '--format', '{{.Ports}}'], 
+                                     capture_output=True, text=True, check=True)
+                if str(current_port) not in result.stdout:
+                    # Port might be available for Docker even if not for direct binding
+                    return current_port
+            except subprocess.CalledProcessError:
+                pass  # Ignore Docker check errors
+            
+            # Try next port
+            current_port += 1
+    
+    raise RuntimeError(f"Could not find an available port after {max_attempts} attempts")
 
 def run_docker_container(app, job_id, workspace_dir):
     """Run the job in a Docker container and stream logs."""
     # First check if Docker is running
     if not check_docker_running():
-        return False, "Docker daemon is not running. Please start Docker and try again."
+        return False, "Docker daemon is not running. Please start Docker."
     
     # Store original Windows path for local operations
     original_workspace_dir = os.path.abspath(workspace_dir)
@@ -237,29 +283,68 @@ def run_docker_container(app, job_id, workspace_dir):
     # Create container name
     container_name = f"job_{job_id}"
     
+    # Check if this is a web app
+    is_web = app.jobs_metadata[job_id].get('is_web', False)
+    container_port = app.jobs_metadata[job_id].get('container_port', 8000)
+    
+    # Build Docker command
+    cmd = ['docker', 'run', '--name', container_name, '--gpus', 'all',
+           '-v', f'{docker_workspace_dir}:/app',
+           '-w', '/app']
+    
+    # Add port mapping for web apps
+    if is_web:
+        max_port_attempts = 5
+        host_port = None
+        last_error = None
+        
+        for attempt in range(max_port_attempts):
+            try:
+                host_port = find_available_port(9000 + attempt * 100)  # Try ports in different ranges
+                # Test Docker port availability explicitly
+                test_cmd = ['docker', 'run', '--rm', '-p', f'{host_port}:{container_port}', 'alpine', 'true']
+                subprocess.run(test_cmd, check=True, capture_output=True)
+                break  # Port is available
+            except (RuntimeError, subprocess.CalledProcessError) as e:
+                last_error = str(e)
+                continue
+        
+        if host_port is None:
+            return False, f"Could not find available port after {max_port_attempts} attempts. Last error: {last_error}"
+        
+        app.jobs_metadata[job_id]['host_port'] = host_port
+        # Always use port mapping for web apps, regardless of OS
+        cmd.extend(['-p', f'{host_port}:{container_port}'])
+        # Add environment variables for the web app
+        cmd.extend(['-e', f'PORT={container_port}',
+                   '-e', f'FLASK_RUN_PORT={container_port}',
+                   '-e', f'FLASK_RUN_HOST=0.0.0.0',
+                   '-e', 'HOST=0.0.0.0'])  # Ensure app binds to all interfaces
+    
+    # Add base image and command
+    cmd.append(base_image)
+    
     # Check for run.sh or main.py using original path
     if os.path.exists(os.path.join(original_workspace_dir, 'run.sh')):
-        cmd = ['docker', 'run', '--name', container_name, '--gpus', 'all',
-               '-v', f'{docker_workspace_dir}:/app',
-               '-w', '/app',
-               base_image,
-               'bash', '-c', 'chmod +x run.sh && stdbuf -o0 ./run.sh']
+        # For web apps, ensure the app binds to 0.0.0.0
+        if is_web:
+            cmd.extend(['bash', '-c', 'tr -d "\\r" < /app/run.sh > /app/run_unix.sh && chmod +x /app/run_unix.sh && (export HOST=0.0.0.0; export PORT=' + str(container_port) + '; export FLASK_RUN_HOST=0.0.0.0; export FLASK_RUN_PORT=' + str(container_port) + '; /app/run_unix.sh)'])
+        else:
+            cmd.extend(['bash', '-c', 'tr -d "\\r" < /app/run.sh > /app/run_unix.sh && chmod +x /app/run_unix.sh && /app/run_unix.sh'])
     elif os.path.exists(os.path.join(original_workspace_dir, 'main.py')):
         # Check if requirements.txt exists
         if os.path.exists(os.path.join(original_workspace_dir, 'requirements.txt')):
             # Install requirements and run the script
-            cmd = ['docker', 'run', '--name', container_name, '--gpus', 'all',
-                   '-v', f'{docker_workspace_dir}:/app',
-                   '-w', '/app',
-                   base_image,
-                   'bash', '-c', 'pip install -r requirements.txt && stdbuf -o0 python3 -u main.py']
+            if is_web:
+                cmd.extend(['bash', '-c', 'tr -d "\\r" < /app/requirements.txt > /app/requirements_unix.txt && pip install -r /app/requirements_unix.txt && (export HOST=0.0.0.0; export PORT=' + str(container_port) + '; export FLASK_RUN_HOST=0.0.0.0; export FLASK_RUN_PORT=' + str(container_port) + '; python3 -u main.py)'])
+            else:
+                cmd.extend(['bash', '-c', 'tr -d "\\r" < /app/requirements.txt > /app/requirements_unix.txt && pip install -r /app/requirements_unix.txt && python3 -u main.py'])
         else:
             # Run the script without installing requirements
-            cmd = ['docker', 'run', '--name', container_name, '--gpus', 'all',
-                   '-v', f'{docker_workspace_dir}:/app',
-                   '-w', '/app',
-                   base_image,
-                   'bash', '-c', 'stdbuf -o0 python3 -u main.py']
+            if is_web:
+                cmd.extend(['bash', '-c', '(export HOST=0.0.0.0; export PORT=' + str(container_port) + '; export FLASK_RUN_HOST=0.0.0.0; export FLASK_RUN_PORT=' + str(container_port) + '; python3 -u main.py)'])
+            else:
+                cmd.extend(['bash', '-c', 'python3 -u main.py'])
     else:
         return False, "No run.sh or main.py found in repository"
     
@@ -326,11 +411,12 @@ def run_docker_container(app, job_id, workspace_dir):
         # Get the exit code
         exit_code = process.wait()
         
-        # Remove the container
-        try:
-            subprocess.run(['docker', 'rm', container_name], check=True)
-        except subprocess.CalledProcessError as e:
-            print(f"Warning: Failed to remove container {container_name}: {e.stderr}")
+        # For web apps, we don't remove the container immediately
+        if not is_web:
+            try:
+                subprocess.run(['docker', 'rm', container_name], check=True)
+            except subprocess.CalledProcessError as e:
+                print(f"Warning: Failed to remove container {container_name}: {e.stderr}")
         
         return exit_code == 0, f"Container exited with code {exit_code}"
         

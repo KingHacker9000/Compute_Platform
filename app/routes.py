@@ -9,6 +9,10 @@ from git import Repo
 import shutil
 import tempfile
 import zipfile
+import yaml
+import requests
+from werkzeug.wrappers import Response
+import json
 
 main = Blueprint('main', __name__)
 
@@ -45,6 +49,23 @@ def clone_repository(repo_url, branch, job_id):
         if os.path.exists(workspace_dir):
             shutil.rmtree(workspace_dir)
         return False
+
+def parse_job_yaml(workspace_dir):
+    """Parse job.yaml file and return configuration."""
+    yaml_path = os.path.join(workspace_dir, 'job.yaml')
+    if not os.path.exists(yaml_path):
+        return {'web': False, 'port': 8000}
+    
+    try:
+        with open(yaml_path, 'r') as f:
+            config = yaml.safe_load(f)
+            return {
+                'web': config.get('web', False),
+                'port': config.get('port', 8000)
+            }
+    except Exception as e:
+        print(f"Error parsing job.yaml: {str(e)}")
+        return {'web': False, 'port': 8000}
 
 @main.route('/')
 def index():
@@ -84,6 +105,10 @@ def submit():
         if not clone_repository(repo_url, branch, job_id):
             return redirect(url_for('main.submit'))
         
+        # Parse job.yaml configuration
+        workspace_dir = os.path.join(get_workspace_dir(), job_id)
+        job_config = parse_job_yaml(workspace_dir)
+        
         # Store job metadata
         current_app.jobs_metadata[job_id] = {
             'id': job_id,
@@ -91,7 +116,10 @@ def submit():
             'branch': branch,
             'status': 'Queued',
             'timestamp': datetime.now().isoformat(),
-            'logs': []
+            'logs': [],
+            'is_web': job_config['web'],
+            'container_port': job_config['port'],
+            'host_port': None  # Will be set when container starts
         }
         
         # Add job to queue
@@ -156,12 +184,15 @@ def get_status(job_id):
 def download_results(job_id):
     """Download the results of a completed job."""
     try:
-        # Get the workspace directory
-        workspace_dir = os.path.join('workspace', job_id)
+        # Get the workspace directory using the helper function
+        workspace_dir = os.path.join(get_workspace_dir(), str(job_id))
         models_dir = os.path.join(workspace_dir, 'models')
+        
+        print(f"Looking for models in: {models_dir}")  # Debug log
         
         # Check if the models directory exists and has files
         if not os.path.exists(models_dir):
+            print(f"Models directory not found at: {models_dir}")  # Debug log
             flash('No results available for download.', 'error')
             return redirect(url_for('main.job_status', job_id=job_id))
             
@@ -169,11 +200,13 @@ def download_results(job_id):
         files = [f for f in os.listdir(models_dir) if not f.startswith('.')]
         
         if not files:
+            print(f"No files found in models directory: {models_dir}")  # Debug log
             flash('No results available for download.', 'error')
             return redirect(url_for('main.job_status', job_id=job_id))
             
         # Get the first file (assuming one model file per job)
         file_path = os.path.join(models_dir, files[0])
+        print(f"Attempting to send file: {file_path}")  # Debug log
         
         # Send the file
         return send_file(
@@ -185,4 +218,76 @@ def download_results(job_id):
     except Exception as e:
         print(f"Error downloading results: {str(e)}")
         flash('Error downloading results.', 'error')
-        return redirect(url_for('main.job_status', job_id=job_id)) 
+        return redirect(url_for('main.job_status', job_id=job_id))
+
+@main.route('/site/<job_id>', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
+@main.route('/site/<job_id>/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
+def proxy_web_app(job_id, path):
+    """Proxy requests to the web app running in the container."""
+    job = current_app.jobs_metadata.get(str(job_id))
+    if not job or not job.get('is_web'):
+        return "Web app not found", 404
+    
+    host_port = job.get('host_port')
+    if not host_port:
+        return "Web app not running", 503
+    
+    # Construct the target URL
+    target_url = f'http://localhost:{host_port}/{path}'
+    print(f"Proxying request to: {target_url}")
+    print(f"Original request method: {request.method}")
+    print(f"Original request headers: {dict(request.headers)}")
+    
+    # Forward the request
+    try:
+        # Get the original request data
+        headers = dict(request.headers)
+        headers.pop('Host', None)  # Remove Host header
+        
+        # Add timeout to the request
+        resp = requests.request(
+            method=request.method,
+            url=target_url,
+            headers=headers,
+            data=request.get_data(),
+            cookies=request.cookies,
+            allow_redirects=False,
+            timeout=30  # Add timeout
+        )
+        
+        print(f"Proxy response status: {resp.status_code}")
+        print(f"Proxy response headers: {dict(resp.headers)}")
+        
+        # Create response
+        excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
+        headers = [(name, value) for name, value in resp.raw.headers.items()
+                  if name.lower() not in excluded_headers]
+        
+        response = Response(resp.content, resp.status_code, headers)
+        return response
+        
+    except requests.exceptions.Timeout:
+        print("Proxy request timed out")
+        return "Request timed out while connecting to the application", 504
+    except requests.exceptions.ConnectionError as e:
+        print(f"Connection error: {str(e)}")
+        # Check if container is still running
+        try:
+            container_name = f"job_{job_id}"
+            result = subprocess.run(['docker', 'inspect', container_name], 
+                                 capture_output=True, text=True)
+            if result.returncode != 0:
+                return "Container is not running", 503
+            
+            container_info = json.loads(result.stdout)[0]
+            if not container_info['State']['Running']:
+                return "Container is not running", 503
+            
+            # Container is running but not responding
+            return f"Application is running but not responding (port {host_port})", 503
+        except Exception as container_error:
+            print(f"Error checking container: {str(container_error)}")
+            return "Error checking application status", 500
+    except requests.exceptions.RequestException as e:
+        print(f"Proxy error: {str(e)}")
+        return f"Error proxying request: {str(e)}", 502 

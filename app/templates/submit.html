@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Submit Repository - AI Hackathon Platform</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <nav class="nav-bar">
+            <a href="{{ url_for('main.index') }}" class="nav-link">Home</a>
+            <a href="{{ url_for('main.submit') }}" class="nav-link active">Submit Repository</a>
+        </nav>
+
+        <h1>Submit Your Repository</h1>
+        
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <form method="POST" class="submit-form">
+            <div class="form-group">
+                <label for="repo_url">GitHub Repository URL:</label>
+                <input type="url" 
+                       id="repo_url" 
+                       name="repo_url" 
+                       required 
+                       placeholder="https://github.com/username/repository"
+                       value="{{ request.form.get('repo_url', '') }}">
+            </div>
+
+            <div class="form-group">
+                <label for="branch">Branch (optional):</label>
+                <input type="text" 
+                       id="branch" 
+                       name="branch" 
+                       placeholder="main"
+                       value="{{ request.form.get('branch', 'main') }}">
+            </div>
+
+            <button type="submit" class="submit-button">Submit Repository</button>
+        </form>
+    </div>
+</body>
+</html> 

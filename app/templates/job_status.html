@@ -1,129 +1,110 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Job Status - AI Hackathon Platform</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-</head>
-<body>
-    <div class="container">
-        <nav class="nav-bar">
-            <a href="{{ url_for('main.index') }}" class="nav-link">Home</a>
-            <a href="{{ url_for('main.submit') }}" class="nav-link">Submit Repository</a>
-        </nav>
+{% extends "base.html" %}
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }}">{{ message }}</div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-
-        <div class="job-status">
-            <h1>Job Status</h1>
-            
-            <div class="job-details">
-                <div class="detail-group">
-                    <label>Job ID:</label>
-                    <span>{{ job.id }}</span>
-                </div>
-                
-                <div class="detail-group">
-                    <label>Repository:</label>
-                    <span>{{ job.repo_url }}</span>
-                </div>
-                
-                <div class="detail-group">
-                    <label>Branch:</label>
-                    <span>{{ job.branch }}</span>
-                </div>
-                
-                <div class="detail-group">
-                    <label>Status:</label>
-                    <span class="status-badge status-{{ job.status.lower() }}" id="status-badge">{{ job.status }}</span>
-                </div>
-                
-                <div class="detail-group">
-                    <label>Submitted:</label>
-                    <span>{{ job.timestamp }}</span>
-                </div>
-
-                {% if job.start_time %}
-                <div class="detail-group">
-                    <label>Started:</label>
-                    <span>{{ job.start_time }}</span>
-                </div>
-                {% endif %}
-
-                {% if job.end_time %}
-                <div class="detail-group">
-                    <label>Completed:</label>
-                    <span>{{ job.end_time }}</span>
-                </div>
-                {% endif %}
+{% block content %}
+<div class="container">
+    <div class="job-status">
+        <h1>Job Status</h1>
+        
+        <div class="job-details">
+            <div class="detail-group">
+                <label>Repository:</label>
+                <span>{{ job.repo_url }}</span>
             </div>
+            
+            <div class="detail-group">
+                <label>Branch:</label>
+                <span>{{ job.branch }}</span>
+            </div>
+            
+            <div class="detail-group">
+                <label>Framework:</label>
+                <span class="framework-badge framework-{{ job.framework.lower() if job.framework else 'python' }}">
+                    {{ job.framework.title() if job.framework else 'Python' }}
+                </span>
+            </div>
+            
+            <div class="detail-group">
+                <label>Status:</label>
+                <span class="status-badge status-{{ job.status.lower() }}" id="status-badge">{{ job.status }}</span>
+            </div>
+            
+            <div class="detail-group">
+                <label>Exit Code:</label>
+                <span class="exit-code {{ 'exit-success' if job.exit_code == 0 else 'exit-error' }}">
+                    {{ job.exit_code if job.exit_code is not none else 'N/A' }}
+                </span>
+            </div>
+        </div>
 
-            <div class="job-logs">
-                <h2>Job Logs</h2>
-                <pre id="log-output" class="log-output"></pre>
+        <div class="job-logs">
+            <h2>Job Logs</h2>
+            <div class="log-output" id="log-output">
+                {% for log in job.logs %}
+                <div class="log-line">{{ log }}</div>
+                {% endfor %}
             </div>
         </div>
     </div>
+</div>
 
-    <script>
-        const jobId = "{{ job.id }}";
+<script>
+let lastLogCount = {{ job.logs|length }};
+let isPolling = true;
+
+console.log('Initial log count:', lastLogCount);
+
+function updateLogs() {
+    if (!isPolling) return;
+    
+    console.log('Fetching logs...');
+    fetch('/logs/{{ job.id }}', {
+        headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log('Received data:', data);
         const logOutput = document.getElementById('log-output');
         const statusBadge = document.getElementById('status-badge');
-        let lastLogCount = 0;
-
-        function updateJobStatus() {
-            fetch(`/job/${jobId}`, {
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status) {
-                        statusBadge.textContent = data.status;
-                        statusBadge.className = `status-badge status-${data.status.toLowerCase()}`;
-                    }
-                })
-                .catch(error => console.error('Error fetching status:', error));
+        
+        // Update status if it changed
+        if (statusBadge.textContent !== data.status) {
+            console.log('Status changed:', data.status);
+            statusBadge.textContent = data.status;
+            statusBadge.className = `status-badge status-${data.status.toLowerCase()}`;
         }
-
-        function updateLogs() {
-            fetch(`/logs/${jobId}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.logs && data.logs.length > lastLogCount) {
-                        // Only update if there are new logs
-                        logOutput.textContent = data.logs.join('\n');
-                        lastLogCount = data.logs.length;
-                        
-                        // Auto-scroll to bottom
-                        logOutput.scrollTop = logOutput.scrollHeight;
-                    }
-                    
-                    // Continue polling if job is not completed
-                    if (statusBadge.textContent !== 'Completed') {
-                        setTimeout(updateLogs, 2000);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error fetching logs:', error);
-                    setTimeout(updateLogs, 2000);
-                });
+        
+        // Only append new logs
+        if (data.logs.length > lastLogCount) {
+            console.log(`Adding ${data.logs.length - lastLogCount} new log lines`);
+            for (let i = lastLogCount; i < data.logs.length; i++) {
+                const logLine = document.createElement('div');
+                logLine.className = 'log-line';
+                logLine.textContent = data.logs[i];
+                logOutput.appendChild(logLine);
+                // Auto-scroll to bottom
+                logOutput.scrollTop = logOutput.scrollHeight;
+            }
+            lastLogCount = data.logs.length;
         }
-
-        // Start polling if job is not completed
-        if (statusBadge.textContent !== 'Completed') {
-            updateLogs();
-            // Update status every 2 seconds as well
-            setInterval(updateJobStatus, 2000);
+        
+        // Stop polling if job is completed or failed
+        if (data.status === 'Completed' || data.status === 'Failed') {
+            console.log('Job finished, stopping polling');
+            isPolling = false;
         }
-    </script>
-</body>
-</html> 
+    })
+    .catch(error => {
+        console.error('Error fetching logs:', error);
+        isPolling = false;
+    });
+}
+
+// Start polling immediately
+updateLogs();
+
+// Poll every 2 seconds
+setInterval(updateLogs, 2000);
+</script>
+{% endblock %} 

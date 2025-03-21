@@ -217,4 +217,44 @@ p {
 
 .log-output::-webkit-scrollbar-thumb:hover {
     background: #a8a8a8;
+}
+
+.exit-code {
+    font-family: 'Consolas', 'Monaco', monospace;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+.exit-success {
+    background-color: #d4edda;
+    color: #155724;
+}
+
+.exit-error {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+.framework-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.framework-pytorch {
+    background-color: #e6f3ff;
+    color: #0056b3;
+}
+
+.framework-tensorflow {
+    background-color: #f5f5f5;
+    color: #ff6f00;
+}
+
+.framework-python {
+    background-color: #e9ecef;
+    color: #495057;
 } 

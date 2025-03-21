@@ -125,6 +125,9 @@ def get_logs(job_id):
     if not job:
         return jsonify({'error': 'Job not found'}), 404
     
-    # Return logs if they exist, otherwise empty list
-    logs = job.get('logs', [])
-    return jsonify({'logs': logs}) 
+    # Return both logs and status
+    return jsonify({
+        'logs': job.get('logs', []),
+        'status': job.get('status', 'Unknown'),
+        'exit_code': job.get('exit_code')
+    }) 

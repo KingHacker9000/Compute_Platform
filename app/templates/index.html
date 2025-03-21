@@ -1,28 +1,8 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Hackathon Platform</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-</head>
-<body>
-    <div class="container">
-        <nav class="nav-bar">
-            <a href="{{ url_for('main.index') }}" class="nav-link active">Home</a>
-            <a href="{{ url_for('main.submit') }}" class="nav-link">Submit Repository</a>
-        </nav>
+{% extends "base.html" %}
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }}">{{ message }}</div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-
-        <h1>Welcome to the AI Hackathon Platform!</h1>
-        <p>Your platform for submitting and running AI projects.</p>
-    </div>
-</body>
-</html> 
+{% block content %}
+<div class="welcome-section">
+    <h1>Welcome to the AI Hackathon Platform</h1>
+    <p>Submit your GitHub repository to run your AI/ML code in a containerized environment.</p>
+</div>
+{% endblock %} 

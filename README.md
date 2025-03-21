@@ -64,7 +64,13 @@ Start the Flask server:
 python run.py
 ```
 
-Visit `http://localhost:5000` in your browser.
+The server will be accessible at:
+- Local access: `http://localhost:5000`
+- Network access: `http://<your-ip>:5000` (shown in console output)
+
+Other devices on the same network can access the platform using your computer's IP address.
+
+Note: Make sure your firewall allows incoming connections on port 5000 if you want to access the server from other devices.
 
 ## 📁 Project Structure
 

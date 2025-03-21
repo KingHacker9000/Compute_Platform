@@ -71,9 +71,12 @@ def has_rocm():
 
 def get_base_image(framework):
     """Get the appropriate Docker base image for the framework."""
+    # Check if we're in WSL2 and have ROCm available
+    is_rocm_available = is_wsl() and has_rocm()
+    
     images = {
-        'pytorch': 'rocm/pytorch:latest',  # ROCm-enabled PyTorch
-        'tensorflow': 'rocm/tensorflow:latest',  # ROCm-enabled TensorFlow
+        'pytorch': 'rocm/pytorch:latest' if is_rocm_available else 'pytorch/pytorch:2.1.0-cpu',
+        'tensorflow': 'rocm/tensorflow:latest' if is_rocm_available else 'tensorflow/tensorflow:2.14.0',
         'python': 'python:3.10-slim'  # Keep default Python image for non-ML workloads
     }
     return images.get(framework, 'python:3.10-slim')

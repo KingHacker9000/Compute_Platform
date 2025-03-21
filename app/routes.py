@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, request, flash, redirect, url_for, current_app, jsonify
+from flask import Blueprint, render_template, request, flash, redirect, url_for, current_app, jsonify, send_file
 import re
 import subprocess
 from urllib.parse import urlparse
@@ -6,8 +6,17 @@ import os
 import uuid
 from datetime import datetime
 from git import Repo
+import shutil
+import tempfile
+import zipfile
 
 main = Blueprint('main', __name__)
+
+def get_workspace_dir():
+    """Get the absolute path to the workspace directory."""
+    # Get the root directory (one level up from app directory)
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(root_dir, 'workspace')
 
 def is_valid_github_url(url):
     """Validate if the URL is a valid GitHub repository URL."""
@@ -23,7 +32,7 @@ def is_valid_github_url(url):
 
 def clone_repository(repo_url, branch, job_id):
     """Clone the repository into the workspace directory."""
-    workspace_dir = os.path.join('workspace', str(job_id))
+    workspace_dir = os.path.join(get_workspace_dir(), str(job_id))
     os.makedirs(workspace_dir, exist_ok=True)
     
     try:
@@ -33,7 +42,6 @@ def clone_repository(repo_url, branch, job_id):
     except Exception as e:
         flash(f'Error cloning repository: {str(e)}', 'error')
         # Clean up the workspace directory on error
-        import shutil
         if os.path.exists(workspace_dir):
             shutil.rmtree(workspace_dir)
         return False
@@ -82,7 +90,8 @@ def submit():
             'repo_url': repo_url,
             'branch': branch,
             'status': 'Queued',
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'logs': []
         }
         
         # Add job to queue
@@ -117,7 +126,7 @@ def job_status(job_id):
     if 'end_time' in display_job:
         display_job['end_time'] = datetime.fromtimestamp(display_job['end_time']).isoformat()
     
-    return render_template('job_status.html', job=display_job)
+    return render_template('job_status.html', job=display_job, job_id=job_id)
 
 @main.route('/logs/<job_id>')
 def get_logs(job_id):
@@ -130,4 +139,50 @@ def get_logs(job_id):
         'logs': job.get('logs', []),
         'status': job.get('status', 'Unknown'),
         'exit_code': job.get('exit_code')
-    }) 
+    })
+
+@main.route('/job/<job_id>/status')
+def get_status(job_id):
+    job = current_app.jobs_metadata.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    return jsonify({
+        'status': job['status'],
+        'exit_code': job.get('exit_code'),
+        'framework': job.get('framework')
+    })
+
+@main.route('/download/<job_id>')
+def download_results(job_id):
+    """Download the results of a completed job."""
+    try:
+        # Get the workspace directory
+        workspace_dir = os.path.join('workspace', job_id)
+        models_dir = os.path.join(workspace_dir, 'models')
+        
+        # Check if the models directory exists and has files
+        if not os.path.exists(models_dir):
+            flash('No results available for download.', 'error')
+            return redirect(url_for('main.job_status', job_id=job_id))
+            
+        # List non-hidden files in the models directory
+        files = [f for f in os.listdir(models_dir) if not f.startswith('.')]
+        
+        if not files:
+            flash('No results available for download.', 'error')
+            return redirect(url_for('main.job_status', job_id=job_id))
+            
+        # Get the first file (assuming one model file per job)
+        file_path = os.path.join(models_dir, files[0])
+        
+        # Send the file
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=files[0]
+        )
+        
+    except Exception as e:
+        print(f"Error downloading results: {str(e)}")
+        flash('Error downloading results.', 'error')
+        return redirect(url_for('main.job_status', job_id=job_id)) 

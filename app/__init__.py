@@ -74,12 +74,32 @@ def get_base_image(framework):
     # Check if we're in WSL2 and have ROCm available
     is_rocm_available = is_wsl() and has_rocm()
     
+    # Define images with fallbacks
     images = {
-        'pytorch': 'rocm/pytorch:latest' if is_rocm_available else 'pytorch/pytorch:2.1.0-cpu',
-        'tensorflow': 'rocm/tensorflow:latest' if is_rocm_available else 'tensorflow/tensorflow:2.14.0',
-        'python': 'python:3.10-slim'  # Keep default Python image for non-ML workloads
+        'pytorch': {
+            'primary': 'rocm/pytorch:latest' if is_rocm_available else 'pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime',
+            'fallback': 'python:3.10-slim'
+        },
+        'tensorflow': {
+            'primary': 'rocm/tensorflow:latest' if is_rocm_available else 'tensorflow/tensorflow:2.14.0',
+            'fallback': 'python:3.10-slim'
+        },
+        'python': {
+            'primary': 'python:3.10-slim',
+            'fallback': 'python:3.10-slim'
+        }
     }
-    return images.get(framework, 'python:3.10-slim')
+    
+    # Get the appropriate image configuration
+    image_config = images.get(framework, images['python'])
+    
+    # Try to pull the primary image
+    try:
+        subprocess.run(['docker', 'pull', image_config['primary']], check=True, capture_output=True)
+        return image_config['primary']
+    except subprocess.CalledProcessError:
+        print(f"Warning: Failed to pull {image_config['primary']}, falling back to {image_config['fallback']}")
+        return image_config['fallback']
 
 def create_app():
     app = Flask(__name__)

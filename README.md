@@ -1,4 +1,4 @@
-# AI Computer Platform
+# AI Compute Platform
 
 A powerful web-based platform for running AI workloads. This platform enables users to submit GitHub repositories, run AI models inside Docker containers with AMD GPU support, and view real-time logs. It also supports hosting live web demos from Flask, Django, or Gunicorn apps at clean URLs.
 

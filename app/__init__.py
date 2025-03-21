@@ -288,9 +288,30 @@ def run_docker_container(app, job_id, workspace_dir):
     container_port = app.jobs_metadata[job_id].get('container_port', 8000)
     
     # Build Docker command
-    cmd = ['docker', 'run', '--name', container_name, '--gpus', 'all',
-           '-v', f'{docker_workspace_dir}:/app',
-           '-w', '/app']
+    cmd = ['docker', 'run', '--name', container_name]
+    
+    # Add GPU support based on environment
+    is_rocm_available = is_wsl() and has_rocm()
+    if is_rocm_available and framework in ['pytorch', 'tensorflow']:
+        # Add ROCm device access
+        cmd.extend([
+            '--device=/dev/kfd',
+            '--device=/dev/dri',
+            '--group-add', 'video',
+            '--cap-add=SYS_PTRACE',  # Required for some ROCm operations
+            '--security-opt', 'seccomp=unconfined'  # Required for ROCm in containers
+        ])
+        app.jobs_metadata[job_id]['logs'].append("ROCm GPU support enabled")
+    else:
+        # Remove GPU flags if no GPU support is available
+        if not is_rocm_available and framework in ['pytorch', 'tensorflow']:
+            app.jobs_metadata[job_id]['logs'].append("Warning: No GPU support detected")
+    
+    # Add volume mount and working directory
+    cmd.extend([
+        '-v', f'{docker_workspace_dir}:/app',
+        '-w', '/app'
+    ])
     
     # Add port mapping for web apps
     if is_web:
@@ -313,15 +334,16 @@ def run_docker_container(app, job_id, workspace_dir):
             return False, f"Could not find available port after {max_port_attempts} attempts. Last error: {last_error}"
         
         app.jobs_metadata[job_id]['host_port'] = host_port
-        # Always use port mapping for web apps, regardless of OS
         cmd.extend(['-p', f'{host_port}:{container_port}'])
         # Add environment variables for the web app
-        cmd.extend(['-e', f'PORT={container_port}',
-                   '-e', f'FLASK_RUN_PORT={container_port}',
-                   '-e', f'FLASK_RUN_HOST=0.0.0.0',
-                   '-e', 'HOST=0.0.0.0'])  # Ensure app binds to all interfaces
+        cmd.extend([
+            '-e', f'PORT={container_port}',
+            '-e', f'FLASK_RUN_PORT={container_port}',
+            '-e', 'FLASK_RUN_HOST=0.0.0.0',
+            '-e', 'HOST=0.0.0.0'  # Ensure app binds to all interfaces
+        ])
     
-    # Add base image and command
+    # Add base image
     cmd.append(base_image)
     
     # Check for run.sh or main.py using original path

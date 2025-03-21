@@ -411,6 +411,7 @@ def run_docker_container(app, job_id, workspace_dir):
     
     try:
         print(f"Starting Docker container with command: {' '.join(cmd)}")
+        app.jobs_metadata[job_id]['logs'].append(f"Starting container with command: {' '.join(cmd)}")
         
         # First, check if we need to pull the image
         inspect_process = subprocess.Popen(
@@ -468,9 +469,29 @@ def run_docker_container(app, job_id, workspace_dir):
                 break
             if line:
                 app.jobs_metadata[job_id]['logs'].append(line.strip())
+                print(f"Container log: {line.strip()}")  # Add console output
         
         # Get the exit code
         exit_code = process.wait()
+        
+        # Check container status
+        try:
+            status_cmd = ['docker', 'inspect', '-f', '{{.State.Status}}', container_name]
+            status = subprocess.run(status_cmd, capture_output=True, text=True, check=True).stdout.strip()
+            app.jobs_metadata[job_id]['logs'].append(f"Container status: {status}")
+            print(f"Container status: {status}")  # Add console output
+            
+            if status == 'running':
+                # Get container logs if it's still running
+                logs_cmd = ['docker', 'logs', container_name]
+                logs = subprocess.run(logs_cmd, capture_output=True, text=True, check=True).stdout
+                app.jobs_metadata[job_id]['logs'].append("Container logs:")
+                app.jobs_metadata[job_id]['logs'].extend(logs.splitlines())
+                print("Container logs:")  # Add console output
+                print(logs)  # Add console output
+        except subprocess.CalledProcessError as e:
+            app.jobs_metadata[job_id]['logs'].append(f"Error checking container status: {str(e)}")
+            print(f"Error checking container status: {str(e)}")  # Add console output
         
         # For web apps, we don't remove the container immediately
         if not is_web:

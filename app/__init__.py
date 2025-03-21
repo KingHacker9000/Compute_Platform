@@ -53,12 +53,28 @@ def detect_framework(job_path):
     # Default to Python if no specific framework is detected
     return 'python'
 
+def is_wsl():
+    """Check if running under Windows Subsystem for Linux."""
+    try:
+        with open('/proc/version', 'r') as f:
+            return 'microsoft' in f.read().lower()
+    except:
+        return False
+
+def has_rocm():
+    """Check if ROCm is available on the system."""
+    try:
+        subprocess.run(['rocminfo'], capture_output=True, check=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
 def get_base_image(framework):
     """Get the appropriate Docker base image for the framework."""
     images = {
-        'pytorch': 'pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime',
-        'tensorflow': 'tensorflow/tensorflow:2.14.0-gpu',
-        'python': 'python:3.10-slim'
+        'pytorch': 'rocm/pytorch:latest',  # ROCm-enabled PyTorch
+        'tensorflow': 'rocm/tensorflow:latest',  # ROCm-enabled TensorFlow
+        'python': 'python:3.10-slim'  # Keep default Python image for non-ML workloads
     }
     return images.get(framework, 'python:3.10-slim')
 
